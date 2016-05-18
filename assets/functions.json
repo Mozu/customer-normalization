@@ -1,0 +1,24 @@
+{
+  "exports": [
+    {
+      "id": "cnAddAccountBefore",
+      "virtualPath": "./dist\\commerce.customer.manifest.all.js",
+      "actionId": "http.commerce.customer.accounts.addAccount.before"
+    },
+    {
+      "id": "cnAddAccountAndLoginBefore",
+      "virtualPath": "./dist\\commerce.customer.manifest.all.js",
+      "actionId": "http.commerce.customer.accounts.addAccountAndLogin.before"
+    },
+    {
+      "id": "cnUpdateAccountBefore",
+      "virtualPath": "./dist\\commerce.customer.manifest.all.js",
+      "actionId": "http.commerce.customer.accounts.updateAccount.before"
+    },
+    {
+      "id": "embedded.platform.applications.install",
+      "virtualPath": "./dist\\platform.applications.manifest.all.js",
+      "actionId": "embedded.platform.applications.install"
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "name": "customer-normalization",
+  "version": "0.1.0",
+  "description": "Allow one registered and one anonymous shopper account",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Mozu/customer-normalization.git\n"
+  },
+  "scripts": {
+    "test": "grunt test"
+  },
+  "devDependencies": {
+    "grunt": "^1.0.1",
+    "grunt-browserify": "^5.0.0",
+    "grunt-contrib-jshint": "^1.0.0",
+    "grunt-contrib-watch": "^1.0.0",
+    "grunt-mocha-test": "^0.12.7",
+    "grunt-mozu-appdev-sync": "^2.4.0",
+    "load-grunt-tasks": "^3.5.0",
+    "mocha": "^2.4.5",
+    "mozu-action-helpers": "^0.5.6",
+    "mozu-action-simulator": "^1.6.3",
+    "time-grunt": "^1.3.0"
+  },
+  "dependencies": {
+    "mozu-node-sdk": "^2.6.2",
+    "underscore": "^1.8.3"
+  }
+}
