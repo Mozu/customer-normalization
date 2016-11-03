@@ -9,8 +9,29 @@ var ActionInstaller = require('mozu-action-helpers/installers/actions');
 
 module.exports = function(context, callback) {
   var installer = new ActionInstaller({ context: context.apiContext });
-  installer.enableActions(context).then(callback.bind(null, null), callback);
+  installer.enableActions(context,null,{
+
+      "cnAddAccountBefore" : function(settings) {
+         console.log("cnAddAccountBefore",settings);
+        settings = settings || {};
+        settings.configuration = settings.configuration || {"enableAnonymousAndRegistered" : false};
+        return settings;
+      },
+      "cnAddAccountAndLoginBefore" : function(settings) {
+                 console.log("cnAddAccountAndLoginBefore",settings);
+        settings = settings || {};
+        settings.configuration = settings.configuration || {"enableAnonymousAndRegistered" : false};
+        return settings;
+      },
+      "cnUpdateAccountBefore" : function(settings) {
+                 console.log("cnUpdateAccountBefore",settings);
+        settings = settings || {};
+        settings.configuration = settings.configuration || {"enableAnonymousAndRegistered" : false};
+        return settings;
+      }
+    }).then(callback.bind(null, null), callback);
 };
+
 },{"mozu-action-helpers/installers/actions":5}],2:[function(require,module,exports){
 module.exports = {
   'embedded.platform.applications.install': {

@@ -5,9 +5,13 @@ var _ = require('underscore');
 customerClient.context['user-claims'] = null;
 var customerClientWithUserClaims = require("mozu-node-sdk/clients/commerce/customer/customerAccount")();
 
+var enableAnonymousAndRegistered = false;
+
 function CustomerService(context, callback) {
     this._context = context;
     this._callback = callback;
+
+    this.enableAnonymousAndRegistered = context.configuration.enableAnonymousAndRegistered;
 }
 
 /**
@@ -52,7 +56,7 @@ CustomerService.prototype.updateCustomerCheck = function(customerAccount) {
             var anonymousAccount = _.findWhere(customerList.items, {isAnonymous: true });
 
             console.log("Found Existing Customer with same email during update.");
-            if ( (registeredAccount && registeredAccount.id != customerAccount.id) && (anonymousAccount && anonymousAccount.id != customerAccount.id)) {
+            if ( (registeredAccount && registeredAccount.id != customerAccount.id) || (anonymousAccount && anonymousAccount.id != customerAccount.id)) {
                 // send error back in callback
                 var msg = "Unable to update account.  Another customer account exists with the same email.";
                 console.error(msg);
@@ -144,7 +148,7 @@ CustomerService.prototype.addAnonymousOrGetCustomer = function(customer) {
 
          var existingCustomer = _.findWhere(customerList.items, {isAnonymous: true });
          console.log(existingCustomer);
-         if (!existingCustomer) { //existing anonymous customer not found...continue to add the customer
+         if (!existingCustomer && self.enableAnonymousAndRegistered) { //existing anonymous customer not found...continue to add the customer
             console.log("Add new anonymous customer");
             return self._callback();
          }
