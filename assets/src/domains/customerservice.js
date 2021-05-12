@@ -1,17 +1,13 @@
-var customerClient = require("mozu-node-sdk/clients/commerce/customer/customerAccount")();
+
 var _ = require('underscore');
 
-// remove userclaims to bypass auth limitations
-customerClient.context['user-claims'] = null;
-var customerClientWithUserClaims = require("mozu-node-sdk/clients/commerce/customer/customerAccount")();
+var customerFactory = require("mozu-node-sdk/clients/commerce/customer/customerAccount");
 
-var enableAnonymousAndRegistered = false;
 
 function CustomerService(context, callback) {
     this._context = context;
-    this._callback = callback;
-
-    this.enableAnonymousAndRegistered = context.configuration.enableAnonymousAndRegistered;
+    this._callback = callback;      
+   // this.enableAnonymousAndRegistered = context.configuration.enableAnonymousAndRegistered;
 }
 
 /**
@@ -30,7 +26,9 @@ CustomerService.prototype.getCustomer = function(custId) {
 CustomerService.prototype.getCustomersByEmail = function(email) {
     console.log("getCustomerByEmail...email: ", email);
     var filterExp = "EmailAddress eq " + email;
-    return customerClient.getAccounts({
+    var customerClientWithoutUserClaims = customerFactory();    
+    customerClientWithoutUserClaims.context['user-claims'] = null;  
+    return customerClientWithoutUserClaims.getAccounts({
         filter: filterExp
     }).then(function(customerList) {
         return customerList;
@@ -49,13 +47,13 @@ CustomerService.prototype.getCustomersByEmail = function(email) {
 CustomerService.prototype.updateCustomerCheck = function(customerAccount) {
     console.log("Trace in updateCustomerCheck()");
     var self = this;
-    self.getCustomersByEmail(customerAccount.EmailAddress).then(function(customerList) {
+    self.getCustomersByEmail(customerAccount.emailAddress).then(function(customerList) {
         console.log("Got a customerList");
         if (customerList.items.length > 0) {
             var registeredAccount = _.findWhere(customerList.items, {isAnonymous: false });
             var anonymousAccount = _.findWhere(customerList.items, {isAnonymous: true });
 
-            console.log("Found Existing Customer with same email during update.");
+            console.log("Found existing customer with same email during update.");
             if ( (registeredAccount && registeredAccount.id != customerAccount.id) || (anonymousAccount && anonymousAccount.id != customerAccount.id)) {
                 // send error back in callback
                 var msg = "Unable to update account.  Another customer account exists with the same email.";
@@ -84,10 +82,10 @@ CustomerService.prototype.updateCustomerCheck = function(customerAccount) {
  * 2. If no previous customer account with the same email address pass the call through to the service
  */
 CustomerService.prototype.addLoginOrGetCustomer = function(customerAuth) {
-    var customer = customerAuth.Account;
+    var customer = customerAuth.account;
     console.log("Trace...in addLoginOrGetCustomer");
     var self = this;
-    self.getCustomersByEmail(customer.EmailAddress).then(function(customerList) {
+    self.getCustomersByEmail(customer.emailAddress).then(function(customerList) {
         console.log("Got a customerList: ");
         if (customerList.items.length === 0) {
             console.log("No customers exist with the same email...pass through to the api.");
@@ -105,16 +103,17 @@ CustomerService.prototype.addLoginOrGetCustomer = function(customerAuth) {
 
         console.log("Found an existing anonymous customer. Upgrading to shopper account");
         var newAcctInfo = {
-            emailAddress: customer.EmailAddress,
-            username: customer.EmailAddress,
-            password: customerAuth.Password,
+            emailAddress: customer.emailAddress,
+            username: customer.emailAddress,
+            password: customerAuth.password,
             isImport: false
         };
 
         // Need userclaims here since the service will store pre-existing userid in the returned access-token
         // CommerceRuntime then uses that in authentication when updating to the authenticated customer account
         // on the Order
-        customerClientWithUserClaims.addLoginToExistingCustomer({
+        customerClient = customerFactory();        
+        customerClient.addLoginToExistingCustomer({
             accountId: anonymousAccount.id
         }, {
             body: newAcctInfo
@@ -140,15 +139,17 @@ CustomerService.prototype.addLoginOrGetCustomer = function(customerAuth) {
 CustomerService.prototype.addAnonymousOrGetCustomer = function(customer) {
     console.log("Trace...in addAnonymousOrGetCustomer: ", customer);
     var self = this;
-    self.getCustomersByEmail(customer.EmailAddress).then(function(customerList) {
+    self.getCustomersByEmail(customer.emailAddress).then(function(customerList) {
         if (customerList.items.length === 0) {
-            console.log("No customers exist with the same email...continue adding record.");
+            console.log("No customers exists with the same email...continue adding record.");
             return self._callback();
         }
 
-         var existingCustomer = _.findWhere(customerList.items, {isAnonymous: true });
-         console.log(existingCustomer);
-         if (!existingCustomer && self.enableAnonymousAndRegistered) { //existing anonymous customer not found...continue to add the customer
+         var existingCustomer = _.findWhere(customerList.items, {isAnonymous: true });         
+         var enableAnonymousAndRegistered = this._context.configuration.enableAnonymousAndRegistered;  
+         console.log(enableAnonymousAndRegistered);       
+         if (!existingCustomer && enableAnonymousAndRegistered) { 
+             //existing anonymous customer not found...continue to add the customer
             console.log("Add new anonymous customer");
             return self._callback();
          }
