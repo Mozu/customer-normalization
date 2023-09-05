@@ -117,44 +117,49 @@ module.exports = function(context, callback) {
 };
 
 },{"../customerservice":5}],5:[function(require,module,exports){
-
 var _ = require('underscore');
 
 var customerFactory = require("mozu-node-sdk/clients/commerce/customer/customerAccount");
-
+var authTicketFactory = require("mozu-node-sdk/clients/commerce/customer/customerAuthTicket");
 
 function CustomerService(context, callback) {
     this._context = context;
-    this._callback = callback;      
-   // this.enableAnonymousAndRegistered = context.configuration.enableAnonymousAndRegistered;
+    this._callback = callback;
 }
 
 /**
  * Get a customer id by Id
  */
-CustomerService.prototype.getCustomer = function(custId) {
+CustomerService.prototype.getCustomer = async function(custId) {
     console.log('Get Customer: ' + custId);
-    return customerClient.getAccount({
-        accountId: custId
-    });
+    try {
+        return await customerClient.getAccount({
+            accountId: custId
+        });
+    } catch (err) {
+        console.error(JSON.stringify(err));
+        this._callback(err);
+    }
 };
 
 /**
  * Get a list of customer accounts with the given email.
  */
-CustomerService.prototype.getCustomersByEmail = function(email) {
+CustomerService.prototype.getCustomersByEmail = async function(email) {
     console.log("getCustomerByEmail...email: ", email);
     var filterExp = "EmailAddress eq " + email;
-    var customerClientWithoutUserClaims = customerFactory();    
-    customerClientWithoutUserClaims.context['user-claims'] = null;  
-    return customerClientWithoutUserClaims.getAccounts({
-        filter: filterExp
-    }).then(function(customerList) {
+    var customerClientWithoutUserClaims = customerFactory();
+    customerClientWithoutUserClaims.context['user-claims'] = null;
+
+    try {
+        const customerList = await customerClientWithoutUserClaims.getAccounts({
+            filter: filterExp
+        });
         return customerList;
-    }, function(err) {
+    } catch (err) {
         console.error(JSON.stringify(err));
-        self._callback(err);
-    });
+        this._callback(err);
+    }
 };
 
 /**
@@ -163,31 +168,33 @@ CustomerService.prototype.getCustomersByEmail = function(email) {
  * exists with the same email address throw a conflict exception
  * Otherwise, pass the call through to the service
  */
-CustomerService.prototype.updateCustomerCheck = function(customerAccount) {
+CustomerService.prototype.updateCustomerCheck = async function(customerAccount) {
     console.log("Trace in updateCustomerCheck()");
-    var self = this;
-    self.getCustomersByEmail(customerAccount.emailAddress).then(function(customerList) {
+    try {
+        var customerList = await this.getCustomersByEmail(customerAccount.emailAddress);
         console.log("Got a customerList");
-        if (customerList.items.length > 0) {
-            var registeredAccount = _.findWhere(customerList.items, {isAnonymous: false });
-            var anonymousAccount = _.findWhere(customerList.items, {isAnonymous: true });
 
-            console.log("Found existing customer with same email during update.");
-            if ( (registeredAccount && registeredAccount.id != customerAccount.id) || (anonymousAccount && anonymousAccount.id != customerAccount.id)) {
-                // send error back in callback
-                var msg = "Unable to update account.  Another customer account exists with the same email.";
-                console.error(msg);
-                self._callback(new Error(msg));
-            } else {
-                console.log("The update is to the same record.  Pass it through to get updated.");
-                self._callback();
-            }
-        } else {
+        if (customerList.items.length === 0) {
             console.log("No records found ...continue updating.");
-            self._callback();
+            return this._callback();
         }
-    }, self._callback);
 
+        var registeredAccount = _.findWhere(customerList.items, {isAnonymous: false });
+        var anonymousAccount = _.findWhere(customerList.items, {isAnonymous: true });
+
+        console.log("Found existing customer with same email during update.");
+
+        if ((registeredAccount && registeredAccount.id != customerAccount.id) || (anonymousAccount && anonymousAccount.id != customerAccount.id)) {
+            var msg = "Unable to update account. Another customer account exists with the same email.";
+            console.error(msg);
+            return this._callback(new Error(msg));
+        }
+
+        console.log("The update is to the same record. Pass it through to get updated.");
+        this._callback();
+    } catch (err) {
+        this._callback(err);
+    }
 };
 
 /**
@@ -200,25 +207,28 @@ CustomerService.prototype.updateCustomerCheck = function(customerAccount) {
  *         i. Throw a conflict exception
  * 2. If no previous customer account with the same email address pass the call through to the service
  */
-CustomerService.prototype.addLoginOrGetCustomer = function(customerAuth) {
+CustomerService.prototype.addLoginOrGetCustomer = async function(customerAuth) {
     var customer = customerAuth.account;
     console.log("Trace...in addLoginOrGetCustomer");
-    var self = this;
-    self.getCustomersByEmail(customer.emailAddress).then(function(customerList) {
+
+    try {
+        var customerList = await this.getCustomersByEmail(customer.emailAddress);
         console.log("Got a customerList: ");
+
         if (customerList.items.length === 0) {
             console.log("No customers exist with the same email...pass through to the api.");
-            return self._callback();
+            return this._callback();
         }
+
         var registeredAccount = _.findWhere(customerList.items, {isAnonymous: false });
 
         if (registeredAccount) {
-            var msg = "Error: An account with the given email already exists.  Please try with a different email or log-in.";
+            var msg = "Error: An account with the given email already exists. Please try with a different email or log-in.";
             console.error(msg);
-            return self._callback(new Error(msg));
+            return this._callback(new Error(msg));
         }
 
-         var anonymousAccount = _.findWhere(customerList.items, {isAnonymous: true });
+        var anonymousAccount = _.findWhere(customerList.items, {isAnonymous: true });
 
         console.log("Found an existing anonymous customer. Upgrading to shopper account");
         var newAcctInfo = {
@@ -228,67 +238,86 @@ CustomerService.prototype.addLoginOrGetCustomer = function(customerAuth) {
             isImport: false
         };
 
+
         // Need userclaims here since the service will store pre-existing userid in the returned access-token
         // CommerceRuntime then uses that in authentication when updating to the authenticated customer account
         // on the Order
-        customerClient = customerFactory();        
-        customerClient.addLoginToExistingCustomer({
-            accountId: anonymousAccount.id
-        }, {
-            body: newAcctInfo
-        }).then(function(newAcct) {
-            console.log("Updated anonymous account to shoppers acount");
+        var customerClientWithoutUserClaims = customerFactory();
+        delete customerClientWithoutUserClaims.context['user-claims'];
 
-            self._context.exec.setAuthorized(true);
-            self._context.response.body = newAcct;
-            self._context.response.end();
-        }, function(err) {
-            self._callback(JSON.stringify(err));
-        });
-    }, self._callback);
+        var authTicketClient = authTicketFactory();        
+
+        try {
+            var newAcct = await customerClientWithoutUserClaims.addLoginToExistingCustomer({
+                accountId: anonymousAccount.id
+            }, {
+                body: newAcctInfo
+            });
+
+            console.log("Updated anonymous account to shoppers account");
+
+            var authRequest = {
+                username: customer.emailAddress,
+                password: customerAuth.password,
+            }
+            var authTicket = await authTicketClient.createUserAuthTicket({               
+            },{
+                body:authRequest
+            });            
+         
+            this._context.exec.setAuthorized(true);          
+            this._context.response.body = authTicket;
+            this._context.response.end();
+        } catch (err) {
+            console.error(JSON.stringify(err));
+            this._callback(JSON.stringify(err));
+        }
+    } catch (err) {
+        this._callback(err);
+    }
 };
 
 /**
- * this method checks to see if a customer exists with the given email.  If it does, do the following:
- * 1.   If a previous customer account exists with the same email address throw a conflict exception
- * 2.   if previous customer account is an anonymous user, switch the customer account to the old anonymous user.
- * 3.   Otherwise, pass the call through to the service
- *
+ * This method checks to see if a customer exists with the given email. If it does, do the following:
+ * 1. If a previous customer account exists with the same email address, throw a conflict exception.
+ * 2. If the previous customer account is an anonymous user, switch the customer account to the old anonymous user.
+ * 3. Otherwise, pass the call through to the service.
  */
-CustomerService.prototype.addAnonymousOrGetCustomer = function(customer) {
+CustomerService.prototype.addAnonymousOrGetCustomer = async function(customer) {
     console.log("Trace...in addAnonymousOrGetCustomer: ", customer);
-    var self = this;
-    self.getCustomersByEmail(customer.emailAddress).then(function(customerList) {
+
+    try {
+        var customerList = await this.getCustomersByEmail(customer.emailAddress);
+
         if (customerList.items.length === 0) {
-            console.log("No customers exists with the same email...continue adding record.");
-            return self._callback();
+            console.log("No customers exist with the same email...continue adding record.");
+            return this._callback();
         }
 
-         var existingCustomer = _.findWhere(customerList.items, {isAnonymous: true });         
-         var enableAnonymousAndRegistered = this._context.configuration.enableAnonymousAndRegistered;  
-         console.log(enableAnonymousAndRegistered);       
-         if (!existingCustomer && enableAnonymousAndRegistered) { 
-             //existing anonymous customer not found...continue to add the customer
-            console.log("Add new anonymous customer");
-            return self._callback();
-         }
+        var existingCustomer = _.findWhere(customerList.items, {isAnonymous: true });
+        var enableAnonymousAndRegistered = this._context.configuration.enableAnonymousAndRegistered;
+        console.log(enableAnonymousAndRegistered);
 
-        // TODO: should we update the existing user?  Other wise the name is(could be) changed in the order.
+        if (!existingCustomer && enableAnonymousAndRegistered) {
+            console.log("Add new anonymous customer");
+            return this._callback();
+        }
+
         console.log("Returning the existing anonymous shopper.");
 
-        self._context.exec.setAuthorized(true);
-        self._context.response.body = existingCustomer;
-        self._context.response.end();
-        self._callback();
-    }, function(error) {
+        this._context.exec.setAuthorized(true);
+        this._context.response.body = existingCustomer;
+        this._context.response.end();
+        this._callback();
+    } catch (error) {
         console.error("An error occurred", error);
-        self._callback();
-    });
+        this._callback();
+    }
 };
 
 module.exports = CustomerService;
 
-},{"mozu-node-sdk/clients/commerce/customer/customerAccount":8,"underscore":36}],6:[function(require,module,exports){
+},{"mozu-node-sdk/clients/commerce/customer/customerAccount":8,"mozu-node-sdk/clients/commerce/customer/customerAuthTicket":9,"underscore":40}],6:[function(require,module,exports){
 module.exports={
   "Production/Sandbox": {
     "homeDomain": "https://home.mozu.com",
@@ -404,7 +433,7 @@ extend(Client, {
 });
 
 module.exports = Client;
-},{"./constants":10,"./plugins/expand-uritemplate-from-context":11,"./plugins/in-memory-auth-cache":12,"./plugins/server-side-prerequisites":18,"./utils/get-config":23,"./utils/make-method":25,"./utils/normalize-context":26,"./utils/sub":30,"./utils/tiny-extend":32}],8:[function(require,module,exports){
+},{"./constants":14,"./plugins/expand-uritemplate-from-context":15,"./plugins/in-memory-auth-cache":16,"./plugins/server-side-prerequisites":22,"./utils/get-config":27,"./utils/make-method":29,"./utils/normalize-context":30,"./utils/sub":34,"./utils/tiny-extend":36}],8:[function(require,module,exports){
 
 
 //------------------------------------------------------------------------------
@@ -421,7 +450,7 @@ var Client = require('../../../client'), constants = Client.constants;
 module.exports = Client.sub({
 	getAccounts: Client.method({
 		method: constants.verbs.GET,
-		url: '{+tenantPod}api/commerce/customer/accounts/?startIndex={startIndex}&pageSize={pageSize}&sortBy={sortBy}&filter={filter}&fields={fields}&q={q}&qLimit={qLimit}&isAnonymous={isAnonymous}&responseFields={responseFields}'
+		url: '{+tenantPod}api/commerce/customer/accounts/?startIndex={startIndex}&pageSize={pageSize}&sortBy={sortBy}&filter={filter}&fields={fields}&q={q}&qLimit={qLimit}&isAnonymous={isAnonymous}&responseFields={responseFields}&responseGroups={responseGroups}'
 	}),
 	getLoginState: Client.method({
 		method: constants.verbs.GET,
@@ -505,6 +534,122 @@ module.exports = Client.sub({
 // </auto-generated>
 //------------------------------------------------------------------------------
 
+var Client = require('../../../client'), constants = Client.constants;
+
+module.exports = Client.sub({
+	createAnonymousShopperAuthTicket: Client.method({
+		method: constants.verbs.GET,
+		url: '{+tenantPod}api/commerce/customer/authtickets/anonymousshopper?responseFields={responseFields}'
+	}),
+	createUserAuthTicket: Client.method({
+		method: constants.verbs.POST,
+		url: '{+tenantPod}api/commerce/customer/authtickets/?responseFields={responseFields}'
+	}),
+	refreshUserAuthTicket: Client.method({
+		method: constants.verbs.PUT,
+		url: '{+tenantPod}api/commerce/customer/authtickets/refresh?refreshToken={refreshToken}&responseFields={responseFields}'
+	})
+});
+
+},{"../../../client":7}],10:[function(require,module,exports){
+
+
+//------------------------------------------------------------------------------
+// <auto-generated>
+//     This code was generated by CodeZu.     
+//
+//     Changes to this file may cause incorrect behavior and will be lost if
+//     the code is regenerated.
+// </auto-generated>
+//------------------------------------------------------------------------------
+
+var Client = require('../../../client'), constants = Client.constants;
+
+module.exports = Client.sub({
+	createUserAuthTicket: Client.method({
+		method: constants.verbs.POST,
+		url: '{+homePod}api/platform/adminuser/authtickets/tenants?tenantId={tenantId}&responseFields={responseFields}'
+	}),
+	refreshAuthTicket: Client.method({
+		method: constants.verbs.PUT,
+		url: '{+homePod}api/platform/adminuser/authtickets/tenants?tenantId={tenantId}&responseFields={responseFields}'
+	}),
+	deleteUserAuthTicket: Client.method({
+		method: constants.verbs.DELETE,
+		url: '{+homePod}api/platform/adminuser/authtickets/?refreshToken={refreshToken}'
+	})
+});
+
+},{"../../../client":7}],11:[function(require,module,exports){
+
+
+//------------------------------------------------------------------------------
+// <auto-generated>
+//     This code was generated by CodeZu.     
+//
+//     Changes to this file may cause incorrect behavior and will be lost if
+//     the code is regenerated.
+// </auto-generated>
+//------------------------------------------------------------------------------
+
+var Client = require('../../../client'), constants = Client.constants;
+
+module.exports = Client.sub({
+	authenticateApp: Client.method({
+		method: constants.verbs.POST,
+		url: '{+homePod}api/platform/applications/authtickets/?responseFields={responseFields}'
+	}),
+	refreshAppAuthTicket: Client.method({
+		method: constants.verbs.PUT,
+		url: '{+homePod}api/platform/applications/authtickets/refresh-ticket?responseFields={responseFields}'
+	}),
+	deleteAppAuthTicket: Client.method({
+		method: constants.verbs.DELETE,
+		url: '{+homePod}api/platform/applications/authtickets/{refreshToken}'
+	})
+});
+
+},{"../../../client":7}],12:[function(require,module,exports){
+
+
+//------------------------------------------------------------------------------
+// <auto-generated>
+//     This code was generated by CodeZu.     
+//
+//     Changes to this file may cause incorrect behavior and will be lost if
+//     the code is regenerated.
+// </auto-generated>
+//------------------------------------------------------------------------------
+
+var Client = require('../../../client'), constants = Client.constants;
+
+module.exports = Client.sub({
+	createDeveloperUserAuthTicket: Client.method({
+		method: constants.verbs.POST,
+		url: '{+homePod}api/platform/developer/authtickets/?developerAccountId={developerAccountId}&responseFields={responseFields}'
+	}),
+	refreshDeveloperAuthTicket: Client.method({
+		method: constants.verbs.PUT,
+		url: '{+homePod}api/platform/developer/authtickets/?developerAccountId={developerAccountId}&responseFields={responseFields}'
+	}),
+	deleteUserAuthTicket: Client.method({
+		method: constants.verbs.DELETE,
+		url: '{+homePod}api/platform/developer/authtickets/?refreshToken={refreshToken}'
+	})
+});
+
+},{"../../../client":7}],13:[function(require,module,exports){
+
+
+//------------------------------------------------------------------------------
+// <auto-generated>
+//     This code was generated by CodeZu.     
+//
+//     Changes to this file may cause incorrect behavior and will be lost if
+//     the code is regenerated.
+// </auto-generated>
+//------------------------------------------------------------------------------
+
 var Client = require('../../client'), constants = Client.constants;
 
 module.exports = Client.sub({
@@ -514,7 +659,7 @@ module.exports = Client.sub({
 	})
 });
 
-},{"../../client":7}],10:[function(require,module,exports){
+},{"../../client":7}],14:[function(require,module,exports){
 'use strict';
 
 var version = require('./version'),
@@ -581,7 +726,7 @@ module.exports = {
   capabilityTimeoutInSeconds: 180,
   version: version.current
 };
-},{"./version":34}],11:[function(require,module,exports){
+},{"./version":38}],15:[function(require,module,exports){
 'use strict';
 
 var getUrlTemplate = require('../utils/get-url-template');
@@ -628,7 +773,7 @@ module.exports = function () {
     return template.render(fullTptEvalCtx);
   };
 };
-},{"../utils/get-url-template":24,"../utils/tiny-extend":32}],12:[function(require,module,exports){
+},{"../utils/get-url-template":28,"../utils/tiny-extend":36}],16:[function(require,module,exports){
 'use strict';
 
 var assert = require('assert');
@@ -685,7 +830,7 @@ module.exports = function InMemoryAuthCache() {
     constructor: InMemoryAuthCache
   };
 };
-},{"assert":undefined}],13:[function(require,module,exports){
+},{"assert":undefined}],17:[function(require,module,exports){
 'use strict';
 
 var AuthProvider = require('../../security/auth-provider');
@@ -711,7 +856,7 @@ module.exports = function (state) {
     return state;
   }
 };
-},{"../../constants":10,"../../security/auth-provider":19,"./get-scope-from-state":17}],14:[function(require,module,exports){
+},{"../../constants":14,"../../security/auth-provider":23,"./get-scope-from-state":21}],18:[function(require,module,exports){
 'use strict';
 
 var TenantCache = require('../../utils/tenant-cache');
@@ -756,7 +901,7 @@ module.exports = function (state) {
     return state;
   }
 };
-},{"../../utils/get-url-template":24,"../../utils/tenant-cache":31,"./get-scope-from-state":17,"mozu-metadata/data/environments.json":6}],15:[function(require,module,exports){
+},{"../../utils/get-url-template":28,"../../utils/tenant-cache":35,"./get-scope-from-state":21,"mozu-metadata/data/environments.json":6}],19:[function(require,module,exports){
 'use strict';
 
 var TenantCache = require('../../utils/tenant-cache');
@@ -788,7 +933,7 @@ module.exports = function (state) {
     return state;
   }
 };
-},{"../../utils/get-url-template":24,"../../utils/tenant-cache":31,"./get-scope-from-state":17}],16:[function(require,module,exports){
+},{"../../utils/get-url-template":28,"../../utils/tenant-cache":35,"./get-scope-from-state":21}],20:[function(require,module,exports){
 'use strict';
 
 var AuthProvider = require('../../security/auth-provider');
@@ -821,7 +966,7 @@ module.exports = function (state) {
     return state;
   }
 };
-},{"../../constants":10,"../../security/auth-provider":19,"./get-scope-from-state":17}],17:[function(require,module,exports){
+},{"../../constants":14,"../../security/auth-provider":23,"./get-scope-from-state":21}],21:[function(require,module,exports){
 'use strict';
 
 var scopes = require('../../constants').scopes;
@@ -845,7 +990,7 @@ module.exports = function (state) {
     return requestConfig.scope;
   }
 };
-},{"../../constants":10}],18:[function(require,module,exports){
+},{"../../constants":14}],22:[function(require,module,exports){
 'use strict';
 /**
  * Sensible default configuration for a NodeJS, ArcJS, or other server env.
@@ -856,7 +1001,7 @@ module.exports = function (state) {
 module.exports = function () {
   return [require('./ensure-tenant-pod-url'), require('./ensure-pci-pod-url'), require('./ensure-user-claims'), require('./ensure-app-claims')];
 };
-},{"./ensure-app-claims":13,"./ensure-pci-pod-url":14,"./ensure-tenant-pod-url":15,"./ensure-user-claims":16}],19:[function(require,module,exports){
+},{"./ensure-app-claims":17,"./ensure-pci-pod-url":18,"./ensure-tenant-pod-url":19,"./ensure-user-claims":20}],23:[function(require,module,exports){
 /* eslint handle-callback-err: 0 */
 'use strict';
 
@@ -868,16 +1013,9 @@ var TenantCache = require('../utils/tenant-cache');
 
 // if (typeof Promise !== "function") require('when/es6-shim/Promise.browserify-es6');
 
-function createMemoizedClientFactory(clientPath) {
-  var c;
-  return function () {
-    return (c || (c = require(clientPath))).apply(this, arguments);
-  };
-}
-
-var makeAppAuthClient = createMemoizedClientFactory('../clients/platform/applications/authTicket');
-var makeDeveloperAuthClient = createMemoizedClientFactory('../clients/platform/developer/developerAdminUserAuthTicket');
-var makeAdminUserAuthClient = createMemoizedClientFactory('../clients/platform/adminuser/tenantAdminUserAuthTicket');
+var makeAppAuthClient = require('../clients/platform/applications/authTicket');
+var makeDeveloperAuthClient = require('../clients/platform/developer/developerAdminUserAuthTicket');
+var makeAdminUserAuthClient = require('../clients/platform/adminuser/tenantAdminUserAuthTicket');
 
 function cacheDataAndCreateAuthTicket(res) {
   var tenants = res.availableTenants;
@@ -981,7 +1119,7 @@ var AuthProvider = {
 };
 
 module.exports = AuthProvider;
-},{"../constants":10,"../utils/tenant-cache":31,"./auth-ticket":20}],20:[function(require,module,exports){
+},{"../clients/platform/adminuser/tenantAdminUserAuthTicket":10,"../clients/platform/applications/authTicket":11,"../clients/platform/developer/developerAdminUserAuthTicket":12,"../constants":14,"../utils/tenant-cache":35,"./auth-ticket":24}],24:[function(require,module,exports){
 'use strict';
 
 /**
@@ -1004,7 +1142,7 @@ function AuthTicket(json) {
 }
 
 module.exports = AuthTicket;
-},{}],21:[function(require,module,exports){
+},{}],25:[function(require,module,exports){
 'use strict';
 
 var _typeof = typeof Symbol === "function" && typeof Symbol.iterator === "symbol" ? function (obj) { return typeof obj; } : function (obj) { return obj && typeof Symbol === "function" && obj.constructor === Symbol && obj !== Symbol.prototype ? "symbol" : typeof obj; };
@@ -1029,7 +1167,7 @@ module.exports = {
     return outObj;
   }
 };
-},{}],22:[function(require,module,exports){
+},{}],26:[function(require,module,exports){
 'use strict';
 
 var _typeof = typeof Symbol === "function" && typeof Symbol.iterator === "symbol" ? function (obj) { return typeof obj; } : function (obj) { return obj && typeof Symbol === "function" && obj.constructor === Symbol && obj !== Symbol.prototype ? "symbol" : typeof obj; };
@@ -1094,7 +1232,7 @@ function ensureString(something) {
 function ensureMessage(res) {
   return res.message || res.body && res.body.message;
 }
-},{"./tiny-extend":32,"util":undefined}],23:[function(require,module,exports){
+},{"./tiny-extend":36,"util":undefined}],27:[function(require,module,exports){
 'use strict';
 // BEGIN INIT
 
@@ -1104,7 +1242,25 @@ var findup = require('./tiny-findup');
 var legalConfigNames = ['mozu.config', 'mozu.config.json'];
 
 module.exports = function getConfig() {
-  var conf;
+  var confJson = null;
+  var conf = {
+    appKey: process.env.KIBO_CLIENT_ID || process.env.KIBO_APP_KEY,
+    sharedSecret: process.env.KIBO_SHARED_SECRET,
+    tenantPod: process.env.KIBO_API_HOST,
+    baseUrl: process.env.KIBO_API_BASE_URL || 'https://home.mozu.com/',
+    basePciUrl: process.env.KIBO_API_PCI_URL || 'https://pmts.mozu.com/',
+    developerAccountId: process.env.KIBO_DEV_ACCOUNT_ID,
+    tenant: process.env.KIBO_TENANT || process.env.KIBO_TENANT_ID,
+    site: process.env.KIBO_SITE || process.env.KIBO_SITE_ID,
+    catalog: process.env.KIBO_CATALOG || process.env.KIBO_CATALOG_ID,
+    masterCatalog: process.env.KIBO_MASTER_CATALOG || process.env.KIBO_MASTER_CATALOG_ID,
+    locale: process.env.KIBO_LOCALE,
+    currency: process.env.KIBO_CURRENCY,
+    developerAccount: {
+      emailAddress: process.env.KIBO_USER_NAME,
+      password: process.env.KIBO_USER_NAME
+    }
+  };
   if (process.env.mozuHosted) {
     try {
       conf = JSON.parse(process.env.mozuHosted).sdkConfig;
@@ -1115,24 +1271,40 @@ module.exports = function getConfig() {
     for (var i = legalConfigNames.length - 1; i >= 0; i--) {
       try {
         var filename = findup(legalConfigNames[i]);
-        if (filename) conf = fs.readFileSync(filename, 'utf-8');
+        if (filename) confJson = fs.readFileSync(filename, 'utf-8');
       } catch (e) {
         continue;
       }
-      if (conf) break;
+      if (confJson) break;
     }
-    if (!conf) {
-      throw new Error("No configuration file found. Either create a 'mozu.config' or 'mozu.config.json' file, or supply full config to the .client() method.");
+    if (confJson) {
+      try {
+        conf = Object.assign({}, conf, JSON.parse(confJson));
+      } catch (e) {
+        throw new Error("Configuration file was unreadable: " + e.message);
+      }
     }
-    try {
-      conf = JSON.parse(conf);
-    } catch (e) {
-      throw new Error("Configuration file was unreadable: " + e.message);
+    if (conf.tenantPod) {
+      conf.tenantPod = /https*:\/\/[^\/]+\//i.exec(conf.tenantPod + '/')[0];
+      var m = /t(\d+)-s(\d+)/gmi.exec(conf.tenantPod);
+      if (m) {
+        conf.tenant = parseInt(m[1]);
+        conf.site = parseInt(m[2]);
+      } else {
+        var _m = /t(\d+)/gmi.exec(conf.tenantPod);
+        if (_m) {
+          conf.tenant = parseInt(_m[1]);
+        }
+      }
+    }
+
+    if (!conf.appKey && !conf.workingApplicationKey) {
+      throw new Error("No configuration  found. Either set the kibo env vars , create a 'mozu.config' or 'mozu.config.json' file, or supply full config to the .client() method.");
     }
   }
   return conf;
 };
-},{"./tiny-findup":33,"fs":undefined}],24:[function(require,module,exports){
+},{"./tiny-findup":37,"fs":undefined}],28:[function(require,module,exports){
 'use strict';
 /**
  * Memoized function to turn URI Template text strings into Template objects.
@@ -1168,7 +1340,7 @@ module.exports = function (templateText) {
     keysUsed: findKeys(templateText)
   };
 };
-},{"uri-template":37}],25:[function(require,module,exports){
+},{"uri-template":41}],29:[function(require,module,exports){
 'use strict';
 
 var extend = require('./tiny-extend');
@@ -1236,7 +1408,7 @@ module.exports = function (config) {
     }
   };
 };
-},{"./request":28,"./tiny-extend":32}],26:[function(require,module,exports){
+},{"./request":32,"./tiny-extend":36}],30:[function(require,module,exports){
 'use strict';
 
 var extend = require('./tiny-extend');
@@ -1265,14 +1437,14 @@ module.exports = function (context) {
     }, ctx);
   }, newContext);
 };
-},{"./tiny-extend":32}],27:[function(require,module,exports){
+},{"./tiny-extend":36}],31:[function(require,module,exports){
 'use strict';
 
 var reISO = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2}(?:\.\d*))(?:Z|(\+|-)([\d|:]*))?$/;
 module.exports = function parseDate(key, value) {
   return typeof value === 'string' && reISO.exec(value) ? new Date(value) : value;
 };
-},{}],28:[function(require,module,exports){
+},{}],32:[function(require,module,exports){
 /* eslint-disable complexity */
 'use strict';
 
@@ -1286,6 +1458,14 @@ var protocolHandlers = {
 var streamToCallback = require('./stream-to-callback');
 var parseJsonDates = require('./parse-json-dates');
 var errorify = require('./errorify');
+var zlib = require('zlib');
+
+var ACCEPT_ENCODING = '';
+if (zlib.createBrotliDecompress && zlib.createGunzip) {
+  ACCEPT_ENCODING = 'br;q=1.0, gzip;q=0.8';
+} else if (zlib.createGunzip) {
+  ACCEPT_ENCODING = 'gzip;q=1.0';
+}
 
 var USER_AGENT = 'Mozu Node SDK v' + constants.version + ' (Node.js ' + process.version + '; ' + process.platform + ' ' + process.arch + ')';
 
@@ -1321,6 +1501,7 @@ function makeHeaders(conf, payload) {
 
   return extend({
     'Accept': 'application/json',
+    'Accept-Encoding': ACCEPT_ENCODING,
     'Connection': 'close',
     'Content-Type': 'application/json; charset=utf-8',
     'User-Agent': USER_AGENT
@@ -1373,7 +1554,9 @@ module.exports = function (options, transform) {
         if (err) return reject(errorify(err, extend({ statusCode: response.statusCode, url: response.req.path }, response.headers)));
         if (body) {
           try {
-            if (response.headers["content-type"] && (response.headers["content-type"].indexOf('json') > -1 || response.headers["content-type"].indexOf('text/plain') > -1)) body = JSON.parse(body, conf.parseDates !== false && parseJsonDates);
+            if (response.headers["content-type"] && (response.headers["content-type"].indexOf('json') > -1 || response.headers["content-type"].indexOf('text/plain') > -1)) {
+              body = JSON.parse(body, conf.parseDates !== false && parseJsonDates);
+            }
           } catch (e) {
             return reject(new Error('Response was not valid JSON: ' + e.message + '\n\n-----\n' + body));
           }
@@ -1398,23 +1581,43 @@ module.exports = function (options, transform) {
     request.end();
   });
 };
-},{"../constants":10,"./errorify":22,"./parse-json-dates":27,"./stream-to-callback":29,"./tiny-extend":32,"http":undefined,"https":undefined,"url":undefined}],29:[function(require,module,exports){
+},{"../constants":14,"./errorify":26,"./parse-json-dates":31,"./stream-to-callback":33,"./tiny-extend":36,"http":undefined,"https":undefined,"url":undefined,"zlib":undefined}],33:[function(require,module,exports){
 'use strict';
 
-var Stream = require('stream').Transform;
+var zlib = require('zlib');
+
+function getDecompressor(encoding) {
+  switch (encoding) {
+    case 'br':
+      return zlib.createBrotliDecompress();
+    case 'gzip':
+      return zlib.createGunzip();
+    default:
+      return null;
+  }
+}
 
 module.exports = function streamToCallback(stream, cb) {
-  var buf = new Stream();
-  //stream.setEncoding('utf8');
-  stream.on('data', function (chunk) {
-    buf.push(chunk);
+  var responseContent = stream;
+
+  var decompressor = getDecompressor(stream.headers['content-encoding']);
+  if (decompressor !== null) {
+    stream.pipe(decompressor);
+    responseContent = decompressor;
+  }
+  var chunks = [];
+  responseContent.on('data', function (chunk) {
+    chunks.push(chunk);
   });
-  stream.on('error', cb);
-  stream.on('end', function () {
-    cb(null, buf.read());
+  responseContent.on('error', cb);
+  responseContent.on('end', function (chunk) {
+    if (chunk) {
+      chunks.push(chunk);
+    }
+    cb(null, Buffer.concat(chunks).toString());
   });
 };
-},{"stream":undefined}],30:[function(require,module,exports){
+},{"zlib":undefined}],34:[function(require,module,exports){
 'use strict';
 
 var util = require('util'),
@@ -1434,7 +1637,7 @@ module.exports = function sub(cons, proto) {
     if (proto) extend(child.prototype, proto);
     return child;
 };
-},{"./tiny-extend":32,"util":undefined}],31:[function(require,module,exports){
+},{"./tiny-extend":36,"util":undefined}],35:[function(require,module,exports){
 'use strict';
 
 var _require = require('./deep-clone'),
@@ -1471,7 +1674,7 @@ module.exports = {
     }
   }
 };
-},{"../clients/platform/tenant":9,"./deep-clone":21}],32:[function(require,module,exports){
+},{"../clients/platform/tenant":13,"./deep-clone":25}],36:[function(require,module,exports){
 'use strict';
 
 module.exports = function extend(target) {
@@ -1484,7 +1687,7 @@ module.exports = function extend(target) {
     return out;
   }, target);
 };
-},{}],33:[function(require,module,exports){
+},{}],37:[function(require,module,exports){
 'use strict';
 
 var path = require('path');
@@ -1502,13 +1705,13 @@ module.exports = function findup(filename) {
   }
   return exists && maybeFile;
 };
-},{"fs":undefined,"path":undefined}],34:[function(require,module,exports){
+},{"fs":undefined,"path":undefined}],38:[function(require,module,exports){
 'use strict';
 
 module.exports = {
   current: "1.1705.17038.0"
 };
-},{}],35:[function(require,module,exports){
+},{}],39:[function(require,module,exports){
 module.exports = function pctEncode(regexp) {
   regexp = regexp || /\W/g;
   return function encode(string) {
@@ -1533,7 +1736,7 @@ module.exports = function pctEncode(regexp) {
   }
 }
 
-},{}],36:[function(require,module,exports){
+},{}],40:[function(require,module,exports){
 (function (global, factory) {
   typeof exports === 'object' && typeof module !== 'undefined' ? module.exports = factory() :
   typeof define === 'function' && define.amd ? define('underscore', factory) :
@@ -1543,19 +1746,19 @@ module.exports = function pctEncode(regexp) {
     exports.noConflict = function () { global._ = current; return exports; };
   }()));
 }(this, (function () {
-  //     Underscore.js 1.13.1
+  //     Underscore.js 1.13.6
   //     https://underscorejs.org
-  //     (c) 2009-2021 Jeremy Ashkenas, Julian Gonggrijp, and DocumentCloud and Investigative Reporters & Editors
+  //     (c) 2009-2022 Jeremy Ashkenas, Julian Gonggrijp, and DocumentCloud and Investigative Reporters & Editors
   //     Underscore may be freely distributed under the MIT license.
 
   // Current version.
-  var VERSION = '1.13.1';
+  var VERSION = '1.13.6';
 
   // Establish the root object, `window` (`self`) in the browser, `global`
   // on the server, or `this` in some virtual machines. We use `self`
   // instead of `window` for `WebWorker` support.
-  var root = typeof self == 'object' && self.self === self && self ||
-            typeof global == 'object' && global.global === global && global ||
+  var root = (typeof self == 'object' && self.self === self && self) ||
+            (typeof global == 'object' && global.global === global && global) ||
             Function('return this')() ||
             {};
 
@@ -1623,7 +1826,7 @@ module.exports = function pctEncode(regexp) {
   // Is a given variable an object?
   function isObject(obj) {
     var type = typeof obj;
-    return type === 'function' || type === 'object' && !!obj;
+    return type === 'function' || (type === 'object' && !!obj);
   }
 
   // Is a given value equal to null?
@@ -1785,7 +1988,7 @@ module.exports = function pctEncode(regexp) {
     var hash = {};
     for (var l = keys.length, i = 0; i < l; ++i) hash[keys[i]] = true;
     return {
-      contains: function(key) { return hash[key]; },
+      contains: function(key) { return hash[key] === true; },
       push: function(key) {
         hash[key] = true;
         return keys.push(key);
@@ -1800,7 +2003,7 @@ module.exports = function pctEncode(regexp) {
     keys = emulatedSet(keys);
     var nonEnumIdx = nonEnumerableProps.length;
     var constructor = obj.constructor;
-    var proto = isFunction$1(constructor) && constructor.prototype || ObjProto;
+    var proto = (isFunction$1(constructor) && constructor.prototype) || ObjProto;
 
     // Constructor is a special case.
     var prop = 'constructor';
@@ -3003,7 +3206,7 @@ module.exports = function pctEncode(regexp) {
   function max(obj, iteratee, context) {
     var result = -Infinity, lastComputed = -Infinity,
         value, computed;
-    if (iteratee == null || typeof iteratee == 'number' && typeof obj[0] != 'object' && obj != null) {
+    if (iteratee == null || (typeof iteratee == 'number' && typeof obj[0] != 'object' && obj != null)) {
       obj = isArrayLike(obj) ? obj : values(obj);
       for (var i = 0, length = obj.length; i < length; i++) {
         value = obj[i];
@@ -3015,7 +3218,7 @@ module.exports = function pctEncode(regexp) {
       iteratee = cb(iteratee, context);
       each(obj, function(v, index, list) {
         computed = iteratee(v, index, list);
-        if (computed > lastComputed || computed === -Infinity && result === -Infinity) {
+        if (computed > lastComputed || (computed === -Infinity && result === -Infinity)) {
           result = v;
           lastComputed = computed;
         }
@@ -3028,7 +3231,7 @@ module.exports = function pctEncode(regexp) {
   function min(obj, iteratee, context) {
     var result = Infinity, lastComputed = Infinity,
         value, computed;
-    if (iteratee == null || typeof iteratee == 'number' && typeof obj[0] != 'object' && obj != null) {
+    if (iteratee == null || (typeof iteratee == 'number' && typeof obj[0] != 'object' && obj != null)) {
       obj = isArrayLike(obj) ? obj : values(obj);
       for (var i = 0, length = obj.length; i < length; i++) {
         value = obj[i];
@@ -3040,13 +3243,26 @@ module.exports = function pctEncode(regexp) {
       iteratee = cb(iteratee, context);
       each(obj, function(v, index, list) {
         computed = iteratee(v, index, list);
-        if (computed < lastComputed || computed === Infinity && result === Infinity) {
+        if (computed < lastComputed || (computed === Infinity && result === Infinity)) {
           result = v;
           lastComputed = computed;
         }
       });
     }
     return result;
+  }
+
+  // Safely create a real, live array from anything iterable.
+  var reStrSymbol = /[^\ud800-\udfff]|[\ud800-\udbff][\udc00-\udfff]|[\ud800-\udfff]/g;
+  function toArray(obj) {
+    if (!obj) return [];
+    if (isArray(obj)) return slice.call(obj);
+    if (isString(obj)) {
+      // Keep surrogate pair characters together.
+      return obj.match(reStrSymbol);
+    }
+    if (isArrayLike(obj)) return map(obj, identity);
+    return values(obj);
   }
 
   // Sample **n** random values from a collection using the modern version of the
@@ -3058,7 +3274,7 @@ module.exports = function pctEncode(regexp) {
       if (!isArrayLike(obj)) obj = values(obj);
       return obj[random(obj.length - 1)];
     }
-    var sample = isArrayLike(obj) ? clone(obj) : values(obj);
+    var sample = toArray(obj);
     var length = getLength(sample);
     n = Math.max(Math.min(n, length), 0);
     var last = length - 1;
@@ -3134,19 +3350,6 @@ module.exports = function pctEncode(regexp) {
   var partition = group(function(result, value, pass) {
     result[pass ? 0 : 1].push(value);
   }, true);
-
-  // Safely create a real, live array from anything iterable.
-  var reStrSymbol = /[^\ud800-\udfff]|[\ud800-\udbff][\udc00-\udfff]|[\ud800-\udfff]/g;
-  function toArray(obj) {
-    if (!obj) return [];
-    if (isArray(obj)) return slice.call(obj);
-    if (isString(obj)) {
-      // Keep surrogate pair characters together.
-      return obj.match(reStrSymbol);
-    }
-    if (isArrayLike(obj)) return map(obj, identity);
-    return values(obj);
-  }
 
   // Return the number of elements in a collection.
   function size(obj) {
@@ -3308,7 +3511,7 @@ module.exports = function pctEncode(regexp) {
   // Complement of zip. Unzip accepts an array of arrays and groups
   // each array's elements on shared indices.
   function unzip(array) {
-    var length = array && max(array, getLength).length || 0;
+    var length = (array && max(array, getLength).length) || 0;
     var result = Array(length);
 
     for (var index = 0; index < length; index++) {
@@ -3577,7 +3780,7 @@ module.exports = function pctEncode(regexp) {
 })));
 
 
-},{}],37:[function(require,module,exports){
+},{}],41:[function(require,module,exports){
 module.exports = (function(){
   /*
    * Generated by PEG.js 0.7.0.
@@ -3893,7 +4096,6 @@ module.exports = (function(){
         
         pos0 = pos;
         pos1 = pos;
-        result0 = [];
         if (/^[a-zA-Z0-9_.%]/.test(input.charAt(pos))) {
           result1 = input.charAt(pos);
           pos++;
@@ -3903,17 +4105,22 @@ module.exports = (function(){
             matchFailed("[a-zA-Z0-9_.%]");
           }
         }
-        while (result1 !== null) {
-          result0.push(result1);
-          if (/^[a-zA-Z0-9_.%]/.test(input.charAt(pos))) {
-            result1 = input.charAt(pos);
-            pos++;
-          } else {
-            result1 = null;
-            if (reportFailures === 0) {
-              matchFailed("[a-zA-Z0-9_.%]");
+        if (result1 !== null) {
+          result0 = [];
+          while (result1 !== null) {
+            result0.push(result1);
+            if (/^[a-zA-Z0-9_.%]/.test(input.charAt(pos))) {
+              result1 = input.charAt(pos);
+              pos++;
+            } else {
+              result1 = null;
+              if (reportFailures === 0) {
+                matchFailed("[a-zA-Z0-9_.%]");
+              }
             }
           }
+        } else {
+          result0 = null;
         }
         if (result0 !== null) {
           result1 = parse_cut();
@@ -4304,7 +4511,7 @@ module.exports = (function(){
   return result;
 })();
 
-},{"./lib/classes":38}],38:[function(require,module,exports){
+},{"./lib/classes":42}],42:[function(require,module,exports){
 // Generated by CoffeeScript 1.6.3
 (function() {
   var FormContinuationExpression, FormStartExpression, FragmentExpression, LabelExpression, NamedExpression, PathParamExpression, PathSegmentExpression, ReservedExpression, SimpleExpression, Template, encoders, _ref, _ref1, _ref2, _ref3, _ref4, _ref5, _ref6, _ref7,
@@ -4723,7 +4930,7 @@ module.exports = (function(){
 
 }).call(this);
 
-},{"./encoders":39}],39:[function(require,module,exports){
+},{"./encoders":43}],43:[function(require,module,exports){
 // Generated by CoffeeScript 1.6.3
 (function() {
   var pctEncode;
@@ -4736,5 +4943,5 @@ module.exports = (function(){
 
 }).call(this);
 
-},{"pct-encode":35}]},{},[1])(1)
+},{"pct-encode":39}]},{},[1])(1)
 });

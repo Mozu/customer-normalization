@@ -14,6 +14,7 @@
     "grunt-browserify": "^5.0.0",
     "grunt-contrib-jshint": "^1.0.0",
     "grunt-contrib-watch": "^1.0.0",
+    "grunt-eslint": "^24.3.0",
     "grunt-mocha-test": "^0.12.7",
     "grunt-mozu-appdev-sync": "^2.4.0",
     "load-grunt-tasks": "^3.5.0",

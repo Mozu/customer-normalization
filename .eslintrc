@@ -1,0 +1,11 @@
+{
+  "env": {
+    "node": true
+  },
+  "parserOptions": {
+    "ecmaVersion": 8, // ES8 (ES2017)
+    "sourceType": "module" // if you're using ES modules
+},
+  "globals": {}
+  
+}

@@ -5,10 +5,19 @@ module.exports = function (grunt) {
     require('load-grunt-tasks')(grunt);
     grunt.initConfig({
         mozuconfig: grunt.file.readJSON('./mozu.config.json'),
+        eslint: {
+            target: ['assets/src/**/*.js'], // Update this with your source files
+            options: {
+                overrideConfigFile: '.eslintrc', // Update this with your ESLint configuration file
+            },
+        },
         jshint: {
             'normal': ['./assets/src/**/*.js'],
             'continuous': {
-                'options': { 'force': true },
+                'options': { 
+                    'force': true,
+                    'esversion': 8 // Specify ES version to support async/await
+                },
                 'src': '<%= jshint.normal %>'
             }
         },
@@ -95,8 +104,9 @@ module.exports = function (grunt) {
             }
         }
     });
+    grunt.loadNpmTasks('grunt-eslint');
     grunt.registerTask('build', [
-        'jshint:normal',
+        'eslint',
         'browserify:all',
         'manifest'//,
         //'test'
