@@ -120,9 +120,6 @@ CustomerService.prototype.addLoginOrGetCustomer = async function(customerAuth) {
         };
 
 
-        // Need userclaims here since the service will store pre-existing userid in the returned access-token
-        // CommerceRuntime then uses that in authentication when updating to the authenticated customer account
-        // on the Order
         var customerClientWithoutUserClaims = customerFactory();
         delete customerClientWithoutUserClaims.context['user-claims'];
 
@@ -137,6 +134,8 @@ CustomerService.prototype.addLoginOrGetCustomer = async function(customerAuth) {
 
             console.log("Updated anonymous account to shoppers account");
 
+            //get new shopper auth ticket after the account is converted to registered account to be able
+            //tp associate anon orders to the refistered account.
             var authRequest = {
                 username: customer.emailAddress,
                 password: customerAuth.password,
